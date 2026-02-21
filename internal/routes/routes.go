@@ -1,29 +1,65 @@
 package routes
 
 import (
-	"github.com/gin-gonic/gin"
 	"quiz-backend/internal/handlers"
-	"quiz-backend/internal/store"
+	"quiz-backend/internal/middleware"
+	"quiz-backend/internal/utils"
+
+	"github.com/gin-gonic/gin"
 )
 
-// SetupRoutes registers all HTTP routes. Pass the in-memory store so handlers can read data.
-func SetupRoutes(r *gin.Engine, st *store.MemoryStore) {
-	studentHandler := handlers.NewStudentHandler(st)
-	teacherHandler := handlers.NewTeacherHandler(st)
+// NewRouter returns a new Gin engine with recovery and logger middleware.
+func NewRouter() *gin.Engine {
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Recovery(), gin.Logger())
+	return r
+}
 
-	student := r.Group("/student")
+// Setup configures all routes: public auth and versioned API with RBAC.
+func Setup(r *gin.Engine, h *Handlers, jwtSecret string) {
+	// JWT secret must be available to auth middleware
+	middleware.JWTSecret = []byte(jwtSecret)
+
+	// Public auth
+	r.POST("/auth/register", h.Auth.Register)
+	r.POST("/auth/login", h.Auth.Login)
+
+	// Versioned API
+	v1 := r.Group("/api/v1")
 	{
-		student.GET("/view_quiz/:quiz_id", studentHandler.ViewQuiz)
-		student.POST("/give_quiz", studentHandler.GiveQuiz)
+		// Teacher: require auth + role teacher
+		teacher := v1.Group("/teacher")
+		teacher.Use(middleware.AuthMiddleware(), middleware.RequireRole("teacher"))
+		{
+			teacher.POST("/quizzes", h.Teacher.CreateQuiz)
+			teacher.POST("/quizzes/:quizId/questions", h.Teacher.AddQuestion)
+			teacher.PUT("/questions/:questionId", h.Teacher.UpdateQuestion)
+			teacher.DELETE("/questions/:questionId", h.Teacher.DeleteQuestion)
+			teacher.GET("/quizzes", h.Teacher.ListQuizzes)
+			teacher.GET("/quizzes/:quizId/submissions", h.Teacher.GetQuizSubmissions)
+		}
+
+		// Student: require auth + role student
+		student := v1.Group("")
+		student.Use(middleware.AuthMiddleware(), middleware.RequireRole("student"))
+		{
+			student.GET("/quizzes", h.Student.ListQuizzes)
+			student.GET("/quizzes/:quizId", h.Student.GetQuiz)
+			student.POST("/quizzes/:quizId/submit", h.Student.SubmitQuiz)
+			student.GET("/student/submissions", h.Student.GetMySubmissions)
+		}
 	}
 
-	teacher := r.Group("/teacher")
-	{
-		teacher.POST("/create_quiz", teacherHandler.CreateQuiz)
-		teacher.POST("/add_question/:quiz_id", teacherHandler.AddQuestion)
-		teacher.PUT("/update_question/:question_id", teacherHandler.UpdateQuestion)
-		teacher.DELETE("/delete_question/:question_id", teacherHandler.DeleteQuestion)
-		teacher.GET("/view_quiz/:quiz_id", teacherHandler.ViewQuiz)
-		teacher.GET("/all_quizzes", teacherHandler.AllQuizzes)
-	}
+	// Health check for deployment
+	r.GET("/health", func(c *gin.Context) {
+		utils.JSONSuccess(c, gin.H{"status": "ok"})
+	})
+}
+
+// Handlers holds all handler instances for dependency injection.
+type Handlers struct {
+	Auth    *handlers.AuthHandler
+	Teacher *handlers.TeacherHandler
+	Student *handlers.StudentHandler
 }

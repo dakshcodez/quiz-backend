@@ -1,138 +1,182 @@
 package handlers
 
 import (
-	"net/http"
+	"context"
+	"time"
 
 	"quiz-backend/internal/models"
-	"quiz-backend/internal/store"
+	"quiz-backend/internal/services"
+	"quiz-backend/internal/utils"
 
 	"github.com/gin-gonic/gin"
 )
 
-// TeacherHandler handles teacher-facing quiz and question CRUD endpoints.
+// TeacherHandler handles teacher-only endpoints; uses QuizService and RBAC.
 type TeacherHandler struct {
-	store *store.MemoryStore
+	quizService *services.QuizService
+	timeout     time.Duration
 }
 
-// NewTeacherHandler creates a teacher handler with the given in-memory store.
-func NewTeacherHandler(store *store.MemoryStore) *TeacherHandler {
-	return &TeacherHandler{store: store}
+// NewTeacherHandler returns a new TeacherHandler.
+func NewTeacherHandler(quizService *services.QuizService, timeout time.Duration) *TeacherHandler {
+	return &TeacherHandler{quizService: quizService, timeout: timeout}
 }
 
-// CreateQuiz handles POST /teacher/create_quiz
+func (h *TeacherHandler) userID(c *gin.Context) string {
+	id, _ := c.Get(string(utils.ContextKeyUserID))
+	s, _ := id.(string)
+	return s
+}
+
+func (h *TeacherHandler) withTimeout(c *gin.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(c.Request.Context(), h.timeout)
+}
+
+// CreateQuiz handles POST /api/v1/teacher/quizzes.
 func (h *TeacherHandler) CreateQuiz(c *gin.Context) {
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	teacherID := h.userID(c)
 	var req models.CreateQuizRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.JSONBadRequest(c, err.Error())
 		return
 	}
-
-	quiz := models.Quiz{
-		ID:          req.ID,
-		Title:       req.Title,
-		Description: req.Description,
-		Questions:   []models.Question{},
-	}
-	if !h.store.CreateQuiz(quiz) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "quiz id already exists"})
+	quiz, err := h.quizService.CreateQuiz(ctx, teacherID, req.Title, req.Description)
+	if err != nil {
+		utils.JSONInternal(c, "failed to create quiz")
 		return
 	}
-	c.JSON(http.StatusCreated, quiz)
+	utils.JSONCreated(c, quiz)
 }
 
-// AddQuestion handles POST /teacher/add_question/:quiz_id
+// AddQuestion handles POST /api/v1/teacher/quizzes/:quizId/questions.
 func (h *TeacherHandler) AddQuestion(c *gin.Context) {
-	quizID := c.Param("quiz_id")
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	teacherID := h.userID(c)
+	quizID := c.Param("quizId")
 	if quizID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "quiz_id is required"})
+		utils.JSONBadRequest(c, "quizId required")
 		return
 	}
-
 	var req models.AddQuestionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.JSONBadRequest(c, err.Error())
 		return
 	}
-
-	q := models.Question{
-		ID:            req.ID,
-		QuestionText:  req.QuestionText,
-		OptionA:       req.OptionA,
-		OptionB:       req.OptionB,
-		OptionC:       req.OptionC,
-		OptionD:       req.OptionD,
-		CorrectAnswer: req.CorrectAnswer,
+	q, err := h.quizService.AddQuestion(ctx, teacherID, quizID, &req)
+	if err != nil {
+		switch err {
+		case services.ErrQuizNotFound:
+			utils.JSONNotFound(c, "quiz not found")
+			return
+		case services.ErrForbidden:
+			utils.JSONForbidden(c, "forbidden")
+			return
+		default:
+			utils.JSONInternal(c, "failed to add question")
+			return
+		}
 	}
-	if !h.store.AddQuestion(quizID, q) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "quiz not found"})
-		return
-	}
-	c.JSON(http.StatusCreated, q)
+	utils.JSONCreated(c, q)
 }
 
-// UpdateQuestion handles PUT /teacher/update_question/:question_id
+// UpdateQuestion handles PUT /api/v1/teacher/questions/:questionId.
 func (h *TeacherHandler) UpdateQuestion(c *gin.Context) {
-	questionID := c.Param("question_id")
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	teacherID := h.userID(c)
+	questionID := c.Param("questionId")
 	if questionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "question_id is required"})
+		utils.JSONBadRequest(c, "questionId required")
 		return
 	}
-
 	var req models.UpdateQuestionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.JSONBadRequest(c, err.Error())
 		return
 	}
-
-	update := models.Question{
-		ID:            questionID,
-		QuestionText:  req.QuestionText,
-		OptionA:       req.OptionA,
-		OptionB:       req.OptionB,
-		OptionC:       req.OptionC,
-		OptionD:       req.OptionD,
-		CorrectAnswer: req.CorrectAnswer,
+	err := h.quizService.UpdateQuestion(ctx, teacherID, questionID, &req)
+	if err != nil {
+		switch err {
+		case services.ErrQuestionNotFound:
+			utils.JSONNotFound(c, "question not found")
+			return
+		case services.ErrForbidden:
+			utils.JSONForbidden(c, "forbidden")
+			return
+		default:
+			utils.JSONInternal(c, "failed to update question")
+			return
+		}
 	}
-	if !h.store.UpdateQuestion(questionID, update) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "question not found"})
-		return
-	}
-	c.JSON(http.StatusOK, update)
+	utils.JSONSuccess(c, gin.H{"message": "updated"})
 }
 
-// DeleteQuestion handles DELETE /teacher/delete_question/:question_id
+// DeleteQuestion handles DELETE /api/v1/teacher/questions/:questionId.
 func (h *TeacherHandler) DeleteQuestion(c *gin.Context) {
-	questionID := c.Param("question_id")
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	teacherID := h.userID(c)
+	questionID := c.Param("questionId")
 	if questionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "question_id is required"})
+		utils.JSONBadRequest(c, "questionId required")
 		return
 	}
-
-	if !h.store.DeleteQuestion(questionID) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "question not found"})
-		return
+	err := h.quizService.DeleteQuestion(ctx, teacherID, questionID)
+	if err != nil {
+		switch err {
+		case services.ErrQuestionNotFound:
+			utils.JSONNotFound(c, "question not found")
+			return
+		case services.ErrForbidden:
+			utils.JSONForbidden(c, "forbidden")
+			return
+		default:
+			utils.JSONInternal(c, "failed to delete question")
+			return
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "question deleted"})
+	utils.JSONSuccess(c, gin.H{"message": "deleted"})
 }
 
-// ViewQuiz handles GET /teacher/view_quiz/:quiz_id (full quiz including correct answers).
-func (h *TeacherHandler) ViewQuiz(c *gin.Context) {
-	quizID := c.Param("quiz_id")
+// ListQuizzes handles GET /api/v1/teacher/quizzes.
+func (h *TeacherHandler) ListQuizzes(c *gin.Context) {
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	teacherID := h.userID(c)
+	list, err := h.quizService.ListQuizzesForTeacher(ctx, teacherID)
+	if err != nil {
+		utils.JSONInternal(c, "failed to list quizzes")
+		return
+	}
+	utils.JSONSuccess(c, list)
+}
+
+// GetQuizSubmissions handles GET /api/v1/teacher/quizzes/:quizId/submissions.
+func (h *TeacherHandler) GetQuizSubmissions(c *gin.Context) {
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	teacherID := h.userID(c)
+	quizID := c.Param("quizId")
 	if quizID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "quiz_id is required"})
+		utils.JSONBadRequest(c, "quizId required")
 		return
 	}
-
-	quiz, ok := h.store.GetQuiz(quizID)
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "quiz not found"})
-		return
+	list, err := h.quizService.GetQuizSubmissions(ctx, teacherID, quizID)
+	if err != nil {
+		switch err {
+		case services.ErrQuizNotFound:
+			utils.JSONNotFound(c, "quiz not found")
+			return
+		case services.ErrForbidden:
+			utils.JSONForbidden(c, "forbidden")
+			return
+		default:
+			utils.JSONInternal(c, "failed to get submissions")
+			return
+		}
 	}
-	c.JSON(http.StatusOK, quiz)
-}
-
-// AllQuizzes handles GET /teacher/all_quizzes
-func (h *TeacherHandler) AllQuizzes(c *gin.Context) {
-	quizzes := h.store.GetAllQuizzes()
-	c.JSON(http.StatusOK, quizzes)
+	utils.JSONSuccess(c, list)
 }

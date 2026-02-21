@@ -1,79 +1,106 @@
 package handlers
 
 import (
-	"net/http"
+	"context"
+	"time"
 
 	"quiz-backend/internal/models"
-	"quiz-backend/internal/store"
+	"quiz-backend/internal/services"
+	"quiz-backend/internal/utils"
 
 	"github.com/gin-gonic/gin"
 )
 
-// StudentHandler handles student-facing quiz endpoints.
+// StudentHandler handles student-only endpoints; uses QuizService and RBAC.
 type StudentHandler struct {
-	store *store.MemoryStore
+	quizService *services.QuizService
+	timeout     time.Duration
 }
 
-// NewStudentHandler creates a student handler with the given in-memory store.
-func NewStudentHandler(store *store.MemoryStore) *StudentHandler {
-	return &StudentHandler{store: store}
+// NewStudentHandler returns a new StudentHandler.
+func NewStudentHandler(quizService *services.QuizService, timeout time.Duration) *StudentHandler {
+	return &StudentHandler{quizService: quizService, timeout: timeout}
 }
 
-// ViewQuiz handles GET /student/view_quiz/:quiz_id
-// Returns the quiz with questions, but never exposes correct_answer.
-func (h *StudentHandler) ViewQuiz(c *gin.Context) {
-	quizID := c.Param("quiz_id")
+func (h *StudentHandler) userID(c *gin.Context) string {
+	id, _ := c.Get(string(utils.ContextKeyUserID))
+	s, _ := id.(string)
+	return s
+}
+
+func (h *StudentHandler) withTimeout(c *gin.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(c.Request.Context(), h.timeout)
+}
+
+// ListQuizzes handles GET /api/v1/quizzes.
+func (h *StudentHandler) ListQuizzes(c *gin.Context) {
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	list, err := h.quizService.ListQuizzes(ctx)
+	if err != nil {
+		utils.JSONInternal(c, "failed to list quizzes")
+		return
+	}
+	utils.JSONSuccess(c, list)
+}
+
+// GetQuiz handles GET /api/v1/quizzes/:quizId. Returns quiz without correct answers.
+func (h *StudentHandler) GetQuiz(c *gin.Context) {
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	quizID := c.Param("quizId")
 	if quizID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "quiz_id is required"})
+		utils.JSONBadRequest(c, "quizId required")
 		return
 	}
-
-	quiz, ok := h.store.GetQuiz(quizID)
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "quiz not found"})
+	view, err := h.quizService.GetQuizForStudent(ctx, quizID)
+	if err != nil {
+		if err == services.ErrQuizNotFound {
+			utils.JSONNotFound(c, "quiz not found")
+			return
+		}
+		utils.JSONInternal(c, "failed to get quiz")
 		return
 	}
-
-	// Build response without exposing correct_answer (teaching: never send answers to client).
-	questions := make([]models.ViewQuestion, 0, len(quiz.Questions))
-	for _, q := range quiz.Questions {
-		questions = append(questions, models.ViewQuestion{
-			ID:           q.ID,
-			QuestionText: q.QuestionText,
-			OptionA:      q.OptionA,
-			OptionB:      q.OptionB,
-			OptionC:      q.OptionC,
-			OptionD:      q.OptionD,
-		})
-	}
-
-	resp := models.ViewQuizResponse{
-		ID:          quiz.ID,
-		Title:       quiz.Title,
-		Description: quiz.Description,
-		Questions:   questions,
-	}
-	c.JSON(http.StatusOK, resp)
+	utils.JSONSuccess(c, view)
 }
 
-// GiveQuiz handles POST /student/give_quiz
-// Phase 1: only validates JSON and returns a mock score. Real scoring in Phase 3.
-func (h *StudentHandler) GiveQuiz(c *gin.Context) {
-	var req models.GiveQuizRequest
+// SubmitQuiz handles POST /api/v1/quizzes/:quizId/submit.
+func (h *StudentHandler) SubmitQuiz(c *gin.Context) {
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	studentID := h.userID(c)
+	quizID := c.Param("quizId")
+	if quizID == "" {
+		utils.JSONBadRequest(c, "quizId required")
+		return
+	}
+	var req models.SubmitQuizRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		utils.JSONBadRequest(c, err.Error())
 		return
 	}
-
-	if req.QuizID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "quiz_id is required"})
+	result, err := h.quizService.SubmitQuiz(ctx, studentID, quizID, req.Answers)
+	if err != nil {
+		if err == services.ErrQuizNotFound {
+			utils.JSONNotFound(c, "quiz not found")
+			return
+		}
+		utils.JSONInternal(c, "failed to submit quiz")
 		return
 	}
+	utils.JSONSuccess(c, result)
+}
 
-	// Phase 1: mock response. No real scoring yet.
-	c.JSON(http.StatusOK, gin.H{
-		"quiz_id": req.QuizID,
-		"score":   5,
-		"message": "Phase 1 mock scoring",
-	})
+// GetMySubmissions handles GET /api/v1/student/submissions.
+func (h *StudentHandler) GetMySubmissions(c *gin.Context) {
+	ctx, cancel := h.withTimeout(c)
+	defer cancel()
+	studentID := h.userID(c)
+	list, err := h.quizService.GetStudentSubmissions(ctx, studentID)
+	if err != nil {
+		utils.JSONInternal(c, "failed to get submissions")
+		return
+	}
+	utils.JSONSuccess(c, list)
 }

@@ -43,3 +43,31 @@ type GiveQuizRequest struct {
 	QuizID  string            `json:"quiz_id" binding:"required"`
 	Answers map[string]string `json:"answers" binding:"required"`
 }
+
+// CreateQuizRequest is the request body for POST /teacher/create_quiz.
+type CreateQuizRequest struct {
+	ID          string `json:"id" binding:"required"`
+	Title       string `json:"title" binding:"required"`
+	Description string `json:"description"`
+}
+
+// AddQuestionRequest is the request body for POST /teacher/add_question/:quiz_id.
+type AddQuestionRequest struct {
+	ID            string `json:"id" binding:"required"`
+	QuestionText  string `json:"question_text" binding:"required"`
+	OptionA       string `json:"option_a" binding:"required"`
+	OptionB       string `json:"option_b" binding:"required"`
+	OptionC       string `json:"option_c" binding:"required"`
+	OptionD       string `json:"option_d" binding:"required"`
+	CorrectAnswer string `json:"correct_answer" binding:"required"`
+}
+
+// UpdateQuestionRequest is the request body for PUT /teacher/update_question/:question_id.
+type UpdateQuestionRequest struct {
+	QuestionText  string `json:"question_text" binding:"required"`
+	OptionA       string `json:"option_a" binding:"required"`
+	OptionB       string `json:"option_b" binding:"required"`
+	OptionC       string `json:"option_c" binding:"required"`
+	OptionD       string `json:"option_d" binding:"required"`
+	CorrectAnswer string `json:"correct_answer" binding:"required"`
+}

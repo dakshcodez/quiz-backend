@@ -1,58 +1,92 @@
-# Quiz App Backend — Phase 1
+# Quiz App Backend — Phase 3
 
-A simple REST API for a quiz application, built with Go and the Gin framework. This is Phase 1 of a backend workshop and focuses on basic API design, routing, and in-memory data handling.
-
----
-
-## Short Description
-
-This project exposes two **student** endpoints: one to view a quiz (and its questions) and one to submit answers. Data lives only in memory, so it’s easy to run and experiment with. No persistence, no auth — just HTTP and JSON.
+A REST API for a quiz application, built with Go and the Gin framework. Phase 3 introduces **real scoring logic**, **submission tracking**, and clearer **separation of business logic** from HTTP handling, while staying in-memory with no authentication.
 
 ---
 
-## Learning Objectives (Phase 1)
+## Short Overview
 
-By the end of this phase, you will have seen:
+This phase is the third step in the workshop: **Phase 1** gave you student endpoints and in-memory storage; **Phase 2** added full teacher CRUD. **Phase 3** focuses on making the quiz submission flow real: compare student answers to correct answers, compute an actual score, store submissions in memory, and optionally expose an endpoint to view results. You also introduce a small **scoring service** (or similar) so business rules live outside handlers, making the code easier to test and extend.
 
-- How to structure a small Go HTTP server with **Gin**
-- How to define **routes** and **handlers** and return **JSON**
-- How to keep data in memory using a **map** and protect it with **sync.RWMutex**
-- How to validate request bodies and return sensible **HTTP status codes** (e.g. 200, 404, 400)
-- A clear split between **models**, **handlers**, **store**, and **routes**
+---
+
+## What Phase 2 Achieved
+
+Phase 2 expanded the API with **teacher endpoints**:
+
+- Create a quiz (`POST /teacher/create_quiz`)
+- Add a question to a quiz (`POST /teacher/add_question/:quiz_id`)
+- Update a question (`PUT /teacher/update_question/:question_id`)
+- Delete a question (`DELETE /teacher/delete_question/:question_id`)
+- View a full quiz with correct answers (`GET /teacher/view_quiz/:quiz_id`)
+- List all quizzes (`GET /teacher/all_quizzes`)
+
+All of this used in-memory storage with `sync.RWMutex` and safe slice updates. Student endpoints remained: view quiz (no answers) and submit quiz (mock scoring only).
+
+---
+
+## What Phase 3 Adds
+
+- **Real scoring logic** — `POST /student/give_quiz` compares each submitted answer to the correct answer for that question and computes the actual score (e.g. 1 point per correct answer).
+- **Submission tracking** — Each quiz submission is stored in memory (e.g. quiz ID, score, total, timestamp). Data resets on server restart.
+- **Business logic separation** — Scoring and answer comparison live in a dedicated layer (e.g. a scoring service or package), so handlers stay thin and logic can be tested independently.
+- **Optional results endpoint** — An endpoint such as `GET /student/results` or `GET /student/submissions` can return a list of stored submissions (or a single result by ID) for teaching and debugging.
+- **Structured response payloads** — The give_quiz response includes `score`, `total`, and optionally `submission_id` or similar, with clear JSON shapes.
+
+---
+
+## Learning Objectives (Phase 3)
+
+By the end of this phase, you will have practiced:
+
+- **Writing backend business logic** — Implementing rules (e.g. “one point per correct answer”) in a dedicated place instead of inside the handler.
+- **Working with maps and slices** — Storing submissions (e.g. slice of submissions or map by ID), iterating over questions and answers, and keeping updates thread-safe with the existing RWMutex.
+- **Comparing submitted answers** — Looking up the correct answer per question (e.g. by question ID), normalizing option format (e.g. "A" vs "a"), and counting correct answers.
+- **Structuring scoring logic** — Inputs (quiz, submitted answers) → outputs (score, total, pass/fail if desired) in a clear, testable function or service.
+- **Maintaining thread safety** — Ensuring submission storage uses the same mutex (or a consistent locking strategy) so concurrent submissions do not race.
+- **Designing response payloads** — Returning JSON that includes score, total, and optionally submission metadata (e.g. ID, timestamp) for clients and for a possible results endpoint.
 
 ---
 
 ## Tech Stack
 
-| Layer        | Choice              |
-| ------------ | ------------------- |
-| Language     | Go                  |
-| HTTP framework | Gin             |
-| Storage      | In-memory (no DB)   |
-| Concurrency  | sync.RWMutex        |
+| Layer          | Choice              |
+| -------------- | ------------------- |
+| Language       | Go                  |
+| HTTP framework | Gin                 |
+| Storage        | In-memory (no DB)   |
+| Concurrency    | sync.RWMutex        |
+| Business logic | Service layer (e.g. internal/services or internal/scoring) |
 
 ---
 
 ## Folder Structure
 
+Phase 3 may introduce a **services** (or **scoring**) package for business logic. A typical layout:
+
 ```
 quiz-backend/
 ├── cmd/
 │   └── server/
-│       └── main.go          # Entry point: starts server and wires routes
+│       └── main.go                  # Entry point: wires store, services, routes
 ├── internal/
 │   ├── handlers/
-│   │   └── student_handler.go   # View quiz & submit quiz (mock scoring)
+│   │   ├── student_handler.go       # Student: view quiz, give quiz (uses scoring)
+│   │   └── teacher_handler.go       # Teacher: CRUD quizzes and questions
 │   ├── models/
-│   │   └── quiz.go              # Quiz, Question, request/response structs
-│   ├── store/
-│   │   └── memory_store.go      # In-memory map + RWMutex, seed data
-│   └── routes/
-│       └── routes.go            # Registers GET/POST routes
+│   │   └── quiz.go                  # Quiz, Question, Submission, request/response structs
+│   ├── routes/
+│   │   └── routes.go                # Student and teacher routes
+│   ├── services/
+│   │   └── scoring.go               # Scoring logic: compare answers, compute score
+│   └── store/
+│       └── memory_store.go          # Quizzes + submissions (or separate submission store)
 ├── .env.example
 ├── go.mod
 └── README.md
 ```
+
+If the scoring logic is small, it might live in a single file under `internal/services` (e.g. `scoring.go`) or inside the store; the important idea is that **handlers call into a clear “scoring” abstraction** rather than inlining all logic.
 
 ---
 
@@ -60,182 +94,181 @@ quiz-backend/
 
 **Prerequisites:** Go 1.21+ installed.
 
-1. Clone the repo and go into the project folder:
-   ```bash
-   cd quiz-backend
-   ```
-
-2. Start the server:
-   ```bash
-   go run ./cmd/server
-   ```
-   You should see the server listening (default port **8080**).
-
-3. (Optional) Use a different port via environment variable:
-   ```bash
-   PORT=3000 go run ./cmd/server
-   ```
-
-The server runs until you stop it with `Ctrl+C`.
-
----
-
-## Example Requests (Postman / cURL)
-
-Base URL: `http://localhost:8080`
-
-### 1. View a quiz
-
-**GET** `/student/view_quiz/:quiz_id`
-
-| Field   | Value                          |
-| ------- | ------------------------------ |
-| Method  | GET                            |
-| URL     | `http://localhost:8080/student/view_quiz/quiz1` |
-
-- **quiz1** is the ID of the pre-seeded quiz. Use it as in the URL above.
-- For a non-existent quiz (e.g. `quiz99`), the API returns **404**.
-
-**cURL:**
 ```bash
-curl http://localhost:8080/student/view_quiz/quiz1
+cd quiz-backend
+go run ./cmd/server
 ```
 
+Server listens on port **8080** by default. Use `PORT=3000 go run ./cmd/server` to change it.
+
 ---
 
-### 2. Submit quiz answers (mock scoring)
+## Endpoints Overview
 
-**POST** `/student/give_quiz`
+### Student Endpoints
+
+| Method | Path                          | Description                                      |
+| ------ | ----------------------------- | ------------------------------------------------ |
+| GET    | `/student/view_quiz/:quiz_id` | View quiz and questions (no correct answers)     |
+| POST   | `/student/give_quiz`          | Submit answers; **real scoring**; returns score and total |
+| GET    | `/student/results`            | *(Optional)* List stored quiz submissions       |
+
+### Teacher Endpoints
+
+| Method | Path                                    | Description                              |
+| ------ | --------------------------------------- | ---------------------------------------- |
+| POST   | `/teacher/create_quiz`                   | Create a new quiz                         |
+| POST   | `/teacher/add_question/:quiz_id`        | Add a question to a quiz                  |
+| PUT    | `/teacher/update_question/:question_id` | Update a question by ID                   |
+| DELETE | `/teacher/delete_question/:question_id` | Delete a question by ID                   |
+| GET    | `/teacher/view_quiz/:quiz_id`           | View full quiz (includes correct answers) |
+| GET    | `/teacher/all_quizzes`                  | List all quizzes                          |
+
+---
+
+## Example Requests and Responses (Phase 3)
+
+### POST /student/give_quiz (real scoring)
+
+**Request**
 
 | Field   | Value                                      |
 | ------- | ------------------------------------------ |
 | Method  | POST                                       |
-| URL     | `http://localhost:8080/student/give_quiz`   |
+| URL     | `http://localhost:8080/student/give_quiz`  |
 | Headers | `Content-Type: application/json`           |
-| Body    | Raw → JSON (see below)                     |
+| Body    | Raw → JSON                                 |
 
-**Request body (JSON):**
+**Request body:**
 ```json
 {
   "quiz_id": "quiz1",
   "answers": {
-    "question1": "A",
+    "question1": "B",
     "question2": "C"
   }
 }
 ```
 
-- `quiz_id` and `answers` are required. Keys in `answers` are question IDs; values are option letters (e.g. `"A"`, `"B"`, `"C"`, `"D"`).
-- In Phase 1 the server does **not** compute a real score; it always returns a mock response.
+- `quiz_id` — ID of the quiz being submitted.
+- `answers` — Object mapping **question ID** to the chosen **option letter** (e.g. `"A"`, `"B"`, `"C"`, `"D"`). Only provided question IDs are scored; missing questions are typically counted as wrong.
 
 **cURL:**
 ```bash
 curl -X POST http://localhost:8080/student/give_quiz \
   -H "Content-Type: application/json" \
-  -d '{"quiz_id":"quiz1","answers":{"question1":"A","question2":"C"}}'
+  -d '{"quiz_id":"quiz1","answers":{"question1":"B","question2":"C"}}'
 ```
 
----
+**Example response (200 OK)**
 
-## Example JSON Responses
-
-### GET /student/view_quiz/quiz1 (200 OK)
-
-```json
-{
-  "id": "quiz1",
-  "title": "Sample Quiz",
-  "description": "A short quiz for the workshop",
-  "questions": [
-    {
-      "id": "question1",
-      "question_text": "What is 2 + 2?",
-      "option_a": "3",
-      "option_b": "4",
-      "option_c": "5",
-      "option_d": "6"
-    },
-    {
-      "id": "question2",
-      "question_text": "What is the capital of France?",
-      "option_a": "London",
-      "option_b": "Berlin",
-      "option_c": "Paris",
-      "option_d": "Madrid"
-    }
-  ]
-}
-```
-
-Note: The API **does not** return the correct answers — only the question text and options.
-
----
-
-### POST /student/give_quiz (200 OK) — Phase 1 mock
+For quiz1 with two questions, answering both correctly (e.g. question1 → "B", question2 → "C"):
 
 ```json
 {
   "quiz_id": "quiz1",
-  "score": 5,
-  "message": "Phase 1 mock scoring"
+  "score": 2,
+  "total": 2,
+  "message": "Submission recorded"
 }
 ```
 
-Real scoring will be added in a later phase.
-
----
-
-### 404 — Quiz not found (GET /student/view_quiz/quiz99)
+If one answer is wrong (e.g. question1 → "A", question2 → "C"):
 
 ```json
 {
-  "error": "quiz not found"
+  "quiz_id": "quiz1",
+  "score": 1,
+  "total": 2,
+  "message": "Submission recorded"
 }
 ```
 
----
-
-### 400 — Invalid request (e.g. missing body or fields)
+If submission storage is implemented and an ID is returned:
 
 ```json
 {
-  "error": "Key: 'GiveQuizRequest.QuizID' Error:Field validation for 'QuizID' failed on the 'required' tag"
+  "quiz_id": "quiz1",
+  "submission_id": "sub_abc123",
+  "score": 2,
+  "total": 2,
+  "message": "Submission recorded"
 }
 ```
 
----
-
-## In-Memory Storage
-
-All quiz data is kept **in memory** in a single struct:
-
-- A **map** from quiz ID (string) to quiz (title, description, questions).
-- The map is only modified at startup when we **seed** one quiz with two questions.
-- Every read (e.g. when you call “view quiz”) uses **sync.RWMutex**: multiple readers can run at once; any future writer would get an exclusive lock. This keeps the map safe when many requests are handled at the same time.
-
-So: no files, no external storage — just a map in RAM. Simple and good for learning.
+- **404** — Quiz not found.
+- **400** — Invalid JSON or missing `quiz_id` / `answers`.
 
 ---
 
-## Known Limitations (Phase 1)
+### GET /student/results (optional)
 
-- **Data resets on restart** — Stopping and restarting the server wipes all in-memory data. The only quiz you see is the one that’s seeded when the server starts.
-- **No real scoring** — `POST /student/give_quiz` only validates the JSON and returns a fixed mock response. It does not check answers or compute a score.
-- **Single pre-seeded quiz** — Only one quiz (`quiz1`) with two questions exists. You cannot create new quizzes yet.
-- **No teacher endpoints** — Only student-facing endpoints are implemented.
+If an endpoint to view stored submissions is added:
+
+| Field  | Value                                    |
+| ------ | ---------------------------------------- |
+| Method | GET                                      |
+| URL    | `http://localhost:8080/student/results`  |
+
+**Example response (200 OK)**
+
+```json
+[
+  {
+    "id": "sub_abc123",
+    "quiz_id": "quiz1",
+    "score": 2,
+    "total": 2,
+    "submitted_at": "2025-02-21T12:00:00Z"
+  },
+  {
+    "id": "sub_def456",
+    "quiz_id": "quiz1",
+    "score": 1,
+    "total": 2,
+    "submitted_at": "2025-02-21T12:05:00Z"
+  }
+]
+```
+
+Exact field names (e.g. `id` vs `submission_id`, `submitted_at` vs `created_at`) may follow your models.
 
 ---
 
-## What’s Coming in Phase 2
+## Scoring Logic (High Level)
 
-In the next phase we plan to add:
+1. **Validate input** — Ensure `quiz_id` and `answers` are present; optionally validate that the quiz exists before scoring.
+2. **Load quiz** — Fetch the quiz (with questions and correct answers) from the store.
+3. **Compare answers** — For each question in the quiz, get the student’s answer from `answers[question_id]`. Compare it to the question’s `correct_answer` (e.g. normalize to uppercase so "a" and "A" both match "A"). If they match, add one point.
+4. **Compute totals** — **Score** = number of correct answers. **Total** = number of questions in the quiz (or number of questions that were submitted, depending on your rule).
+5. **Persist submission (optional)** — Store quiz_id, score, total, and optionally an ID and timestamp in memory (e.g. slice or map), protected by the same mutex as the rest of the store.
+6. **Respond** — Return JSON with `score`, `total`, and optionally `submission_id` and a short message.
 
-- **Teacher endpoints** — e.g. create a quiz, add questions.
-- **Real scoring** — `POST /student/give_quiz` will compare answers to the correct ones and return an actual score.
-- Possibly **persistent storage** so that quizzes and results survive server restarts.
+All of steps 2–5 can live inside a **scoring service** (or similar) that receives the quiz and the answers map and returns score, total, and any submission record; the handler then writes the submission to the store (if applicable) and returns the HTTP response.
+
+---
+
+## Known Limitations
+
+- **Still in-memory** — Quizzes and submissions are lost when the server restarts. No persistence.
+- **No authentication** — Anyone can call student and teacher endpoints. No concept of “current user” or “teacher vs student” identity.
+- **No RBAC** — No role-based access control; any client can create quizzes, add questions, or submit answers.
+- **Data resets on restart** — All created quizzes, questions, and submissions disappear after a restart. The only data that returns is the seeded quiz from startup.
+
+---
+
+## What’s Coming in Phase 4
+
+Phase 4 is planned to move toward a production-style design:
+
+- **Authentication** — Identify who is calling the API (e.g. login, tokens or sessions).
+- **Middleware** — Cross-cutting concerns (logging, auth checks, request ID) in HTTP middleware.
+- **RBAC** — Restrict teacher endpoints to teachers and student endpoints to students (or appropriate roles).
+- **Production-ready architecture** — Clear separation of config, logging, and error handling; possibly health checks and graceful shutdown.
+- **Possibly persistent storage** — Database or file-based persistence so quizzes and results survive restarts.
 
 ---
 
 ## Summary
 
-Phase 1 gives you a minimal but clean Quiz App backend: view one quiz, submit answers (mock response), in-memory storage with a map and RWMutex, and clear separation of routes, handlers, models, and store. Use this as the base for Phase 2 and beyond.
+Phase 3 replaces mock scoring with **real scoring**: compare submitted answers to correct answers, compute score and total, and optionally store submissions in memory and expose a results endpoint. By moving scoring into a dedicated service (or package), you keep handlers thin and business logic testable. The API remains in-memory with no auth or RBAC, setting the stage for Phase 4’s authentication and production concerns.

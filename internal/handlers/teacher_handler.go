@@ -37,12 +37,12 @@ func (h *TeacherHandler) CreateQuiz(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "quiz id already exists"})
 		return
 	}
-	c.JSON(http.StatusCreated, quiz)
+	c.JSON(http.StatusOK, quiz)
 }
 
 // AddQuestion handles POST /teacher/add_question/:quiz_id
 func (h *TeacherHandler) AddQuestion(c *gin.Context) {
-	quizID := c.Param("quiz_id")
+	quizID := c.Param("id")
 	if quizID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "quiz_id is required"})
 		return
@@ -125,7 +125,7 @@ func (h *TeacherHandler) ViewQuiz(c *gin.Context) {
 
 	quiz, ok := h.store.GetQuiz(quizID)
 	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "quiz not found"})
+		c.JSON(http.StatusOK, quiz)
 		return
 	}
 	c.JSON(http.StatusOK, quiz)
